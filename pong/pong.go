@@ -17,39 +17,36 @@ const (
 	cmdDown = 1
 )
 
+func initial(time core.Tick, state core.StateMap, mut core.MutFuncs) {
+	if time != 1 {
+		return
+	}
+	pos := VecD{0, 60, 0}
+	size := VecD{200, 5, 30}
+	rot := Eye(3)
+	createWall(pos, size, rot, mut)
+
+	pos = VecD{0, -60, 0}
+	size = VecD{200, 5, 30}
+	rot = Eye(3)
+	createWall(pos, size, rot, mut)
+}
+
 func move(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 	pos := state["pos"].(helpers.VecMap)
 	vel := state["vel"].(helpers.VecMap)
+	players := state["players"].(core.IdMap)
 
-	for i := range vel {
-		if !vel[i].Equals(NewVecD(3)) {
-			newPos := NewVecD(3).Add(pos[i], vel[i])
-			newVel := vel[i]
+	for id := range vel {
+		if !vel[id].Equals(NewVecD(3)) {
+			newVel := vel[id]
 			newVel[2] = 0
-			if newPos[1] > 50 {
-				newPos[1] = 50
-				if newVel[1] > 0 {
-					newVel[1] = -newVel[1]
-				}
-			} else if newPos[1] < -50 {
-				newPos[1] = -50
-				if newVel[1] < 0 {
-					newVel[1] = -newVel[1]
-				}
+			if _, ok := players[id]; ok {
+				newVel[0] = 0
 			}
-			if newPos[0] > 120 {
-				newPos[0] = 100
-				if newVel[0] > 0 {
-					newVel[0] = -newVel[0]
-				}
-			} else if newPos[0] < -120 {
-				newPos[0] = -100
-				if newVel[0] < 0 {
-					newVel[0] = -newVel[0]
-				}
-			}
-			mut.Mutate("pos", i, newPos)
-			mut.Mutate("vel", i, newVel)
+			newPos := NewVecD(3).Add(pos[id], newVel)
+			mut.Mutate("pos", id, newPos)
+			mut.Mutate("vel", id, newVel)
 		}
 	}
 }
@@ -129,80 +126,76 @@ func destroyPlayer(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 func resolveCollisions(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 	pos := state["pos"].(helpers.VecMap)
 	vel := state["vel"].(helpers.VecMap)
-	size := state["size"].(helpers.VecMap)
+	scale := state["scale"].(helpers.VecMap)
+	rot := state["rot"].(core.IdMap)
+	supp := state["supfun"].(core.IdMap)
 	massInv := state["massinv"].(core.IdMap)
+	contacts := state["contact"].(ContactList)
 
-	ids := make([]core.EntId, len(pos))
-	rb := make([]*physics.RigidBody, len(pos))
-	i := 0
-	for id := range pos {
-		ids[i] = id
-		v := size[id].Copy().(VecD)
-		v.Scale(v, 0.5)
-		A := FromArrayD(v, false, 3, 1)
-		for ix := 0; ix < 3; ix++ {
-			v[ix] = -v[ix]
-			A.AddCol(v)
-			v[ix] = -v[ix]
-		}
-		for ix := 0; ix < 3; ix++ {
-			v[ix] = -v[ix]
-		}
-		A.AddCol(v)
-		for ix := 0; ix < 3; ix++ {
-			v[ix] = -v[ix]
-			A.AddCol(v)
-			v[ix] = -v[ix]
-		}
+	/*	ids := make([]core.EntId, len(pos))
+		rb := make([]*physics.RigidBody, len(pos))
+		i := 0
+		for id := range pos {
+			ids[i] = id
+			v := size[id].Copy().(VecD)
 
-		rb[i] = new(physics.RigidBody)
-		rb[i].Pos = pos[id]
-		rb[i].Rot = Eye(3)
-		rb[i].MassInv = float64(massInv[id].(helpers.Float64))
-		rb[i].LinOpt = physics.LinOptPoly(A)
-
-		i++
-	}
-
-	for ix1 := 0; ix1 < len(ids); ix1++ {
-		for ix2 := ix1 + 1; ix2 < len(ids); ix2++ {
-			c := physics.NewContact()
-			c.A = rb[ix1]
-			c.B = rb[ix2]
-
-			c.Update()
-
-			v1 := vel[ids[ix1]]
-			v2 := vel[ids[ix2]]
-
-			dv := NewVecD(3).Sub(v1, v2)
-			dp := NewVecD(3).Sub(rb[ix2].Pos, rb[ix1].Pos)
-
-			vProj := NewVecD(3)
-			vProj.Scale(c.Normal, Dot(c.Normal, dv))
-			nV := 0.0
-			if Dot(dp, vProj) > 0 {
-				nV = math.Abs(Dot(c.Normal, dv))
+			rb[i] = new(physics.RigidBody)
+			if id == ballId {
+				rb[i].LinOpt = physics.LinOptSphere(v[0])
+			} else {
+				A := physics.AABB(v)
+				rb[i].LinOpt = physics.LinOptPoly(A)
 			}
-			remove := c.Dist - 0.1 - nV
 
-			log.Println(c.Dist)
+			rb[i].Pos = pos[id]
+			rb[i].Rot = Eye(3)
+			rb[i].MassInv = float64(massInv[id].(helpers.Float64))
 
-			log.Println("Normal", c.Normal)
-			log.Println("vproj", vProj)
-			log.Println("dp", dp)
-			log.Println("c.Dist", c.Dist)
-			if remove < 0 {
-				vProj.Normalize(vProj)
-				imp := -nV / (c.A.MassInv + c.B.MassInv)
-				v1New := NewVecD(3).Add(v1,
-					NewVecD(3).Scale(vProj, 2*imp*c.A.MassInv))
-				v2New := NewVecD(3).Sub(v2,
-					NewVecD(3).Scale(vProj, 2*imp*c.B.MassInv))
-				mut.Mutate("vel", ids[ix1], v1New)
-				mut.Mutate("vel", ids[ix2], v2New)
-				log.Println("newVels", v1New, v2New)
-			}
+			i++
+		}*/
+
+	for ids, c := range contacts {
+		pA, pB := pos[ids.a], pos[ids.b]
+		vA, vB := vel[ids.a], vel[ids.b]
+		rotA, rotB := rot[ids.a].(*DenseD), rot[ids.b].(*DenseD)
+		scaleA, scaleB := scale[ids.a], scale[ids.b]
+		suppA := supp[ids.a].(physics.SupportFun)
+		suppB := supp[ids.b].(physics.SupportFun)
+
+		transA := NewDenseD(3, 3)
+		transA.Mul(rotA, DiagD(scaleA))
+		transB := NewDenseD(3, 3)
+		transB.Mul(rotB, DiagD(scaleB))
+
+		c.Update(pA, pB, transA, transB, suppA, suppB)
+
+		dv := NewVecD(3).Sub(vA, vB)
+		dp := NewVecD(3).Sub(pB, pA)
+
+		vProj := NewVecD(3)
+		vProj.Axpy(Ddot(c.Normal, dv), c.Normal)
+		nV := 0.0
+		if Ddot(dp, vProj) > 0 {
+			nV = math.Abs(Ddot(c.Normal, dv))
+		}
+		remove := c.Dist - 0.1 - nV
+
+		log.Println(c.Dist)
+
+		log.Println("Normal", c.Normal)
+		log.Println("vproj", vProj)
+		log.Println("dp", dp)
+		log.Println("c.Dist", c.Dist)
+		if remove < 0 {
+			vProj.Normalize(vProj)
+			imp := -nV / (c.A.MassInv + c.B.MassInv)
+			vANew := NewVecD(3).Add(vA,
+				NewVecD(3).Axpy(2*imp*c.A.MassInv, vProj))
+			vBNew := NewVecD(3).Sub(vB,
+				NewVecD(3).Axpy(2*imp*c.B.MassInv, vProj))
+			mut.Mutate("vel", ids.a, vANew)
+			mut.Mutate("vel", ids.b, vBNew)
+			log.Println("newVels", vANew, vBNew)
 		}
 	}
 }
@@ -233,7 +226,7 @@ func checkBall(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 	}
 
 	ballPos := pos[ballId]
-	if ballPos[0] < -100 {
+	if ballPos[0] < -110 {
 		vely := (rand.Float64() - 0.5) * 4
 		vel := VecD{-3, vely, 0}
 		mut.Mutate("pos", ballId, NewVecD(3))
@@ -241,7 +234,7 @@ func checkBall(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 		mut.Mutate("score", p2, score[p2].(helpers.Uint32)+1)
 		log.Println(score)
 	}
-	if ballPos[0] > 100 {
+	if ballPos[0] > 110 {
 		vely := (rand.Float64() - 0.5) * 4
 		vel := VecD{3, vely, 0}
 		mut.Mutate("pos", ballId, NewVecD(3))
@@ -271,21 +264,25 @@ func main() {
 	info := core.SerInfo{entSel, make([]string, 5)}
 	info.States[0] = "pos"
 	info.States[1] = "vel"
-	info.States[2] = "size"
-	info.States[3] = "ori"
-	info.States[4] = "score"
+	info.States[2] = "scale"
+	info.States[4] = "model"
+	//	info.States[5] = "score"
 
 	srv.SetSerInfo(info)
 
 	srv.AddState("pos", helpers.NewVecMap())
 	srv.AddState("vel", helpers.NewVecMap())
-	srv.AddState("size", helpers.NewVecMap())
-	srv.AddState("ori", helpers.NewVecMap())
+	srv.AddState("scale", helpers.NewVecMap())
+	srv.AddState("rot", core.NewIdMap())
+	srv.AddState("contact", NewContactList())
+
 	srv.AddState("players", core.NewIdMap())
+	srv.AddState("model", core.NewIdMap())
 	srv.AddState("score", core.NewIdMap())
 	srv.AddState("massinv", core.NewIdMap())
 	srv.AddState("ball", core.NewIdList())
 
+	srv.AddTransFunc(0, initial)
 	srv.AddTransFunc(0, handleLogin)
 	srv.AddTransFunc(0, destroyPlayer)
 	srv.AddTransFunc(1, processInput)
