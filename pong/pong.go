@@ -24,12 +24,12 @@ func initial(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 	pos := VecD{0, 60, 0}
 	size := VecD{200, 5, 30}
 	rot := Eye(3)
-	createWall(pos, size, rot, mut)
+	createWall(state, pos, size, rot, mut)
 
 	pos = VecD{0, -60, 0}
 	size = VecD{200, 5, 30}
 	rot = Eye(3)
-	createWall(pos, size, rot, mut)
+	createWall(state, pos, size, rot, mut)
 }
 
 func move(time core.Tick, state core.StateMap, mut core.MutFuncs) {
@@ -88,17 +88,17 @@ func handleLogin(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 			pl2 = 1
 		}
 		for id, _ := range logins {
-			createPlayer(id, pl2, mut)
-			createBall(mut)
+			createPlayer(state, id, pl2, mut)
+			createBall(state, mut)
 			return
 		}
 	}
 	i := 0
 	for id, _ := range logins {
 		i++
-		createPlayer(id, helpers.Uint32(i), mut)
+		createPlayer(state, id, helpers.Uint32(i), mut)
 		if i == 2 {
-			createBall(mut)
+			createBall(state, mut)
 			return
 		}
 	}
@@ -128,39 +128,17 @@ func resolveCollisions(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 	vel := state["vel"].(helpers.VecMap)
 	scale := state["scale"].(helpers.VecMap)
 	rot := state["rot"].(core.IdMap)
-	supp := state["supfun"].(core.IdMap)
+	supp := state["supportfunc"].(core.IdMap)
 	massInv := state["massinv"].(core.IdMap)
 	contacts := state["contact"].(ContactList)
-
-	/*	ids := make([]core.EntId, len(pos))
-		rb := make([]*physics.RigidBody, len(pos))
-		i := 0
-		for id := range pos {
-			ids[i] = id
-			v := size[id].Copy().(VecD)
-
-			rb[i] = new(physics.RigidBody)
-			if id == ballId {
-				rb[i].LinOpt = physics.LinOptSphere(v[0])
-			} else {
-				A := physics.AABB(v)
-				rb[i].LinOpt = physics.LinOptPoly(A)
-			}
-
-			rb[i].Pos = pos[id]
-			rb[i].Rot = Eye(3)
-			rb[i].MassInv = float64(massInv[id].(helpers.Float64))
-
-			i++
-		}*/
 
 	for ids, c := range contacts {
 		pA, pB := pos[ids.a], pos[ids.b]
 		vA, vB := vel[ids.a], vel[ids.b]
 		rotA, rotB := rot[ids.a].(*DenseD), rot[ids.b].(*DenseD)
 		scaleA, scaleB := scale[ids.a], scale[ids.b]
-		suppA := supp[ids.a].(physics.SupportFun)
-		suppB := supp[ids.b].(physics.SupportFun)
+		suppA := supp[ids.a].(physics.SupportFunc)
+		suppB := supp[ids.b].(physics.SupportFunc)
 
 		transA := NewDenseD(3, 3)
 		transA.Mul(rotA, DiagD(scaleA))
@@ -180,22 +158,17 @@ func resolveCollisions(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 		}
 		remove := c.Dist - 0.1 - nV
 
-		log.Println(c.Dist)
-
-		log.Println("Normal", c.Normal)
-		log.Println("vproj", vProj)
-		log.Println("dp", dp)
-		log.Println("c.Dist", c.Dist)
 		if remove < 0 {
+			minvA := float64(massInv[ids.a].(helpers.Float64))
+			minvB := float64(massInv[ids.b].(helpers.Float64))
 			vProj.Normalize(vProj)
-			imp := -nV / (c.A.MassInv + c.B.MassInv)
+			imp := -nV / (minvA + minvB)
 			vANew := NewVecD(3).Add(vA,
-				NewVecD(3).Axpy(2*imp*c.A.MassInv, vProj))
+				NewVecD(3).Axpy(2*imp*minvA, vProj))
 			vBNew := NewVecD(3).Sub(vB,
-				NewVecD(3).Axpy(2*imp*c.B.MassInv, vProj))
+				NewVecD(3).Axpy(2*imp*minvB, vProj))
 			mut.Mutate("vel", ids.a, vANew)
 			mut.Mutate("vel", ids.b, vBNew)
-			log.Println("newVels", vANew, vBNew)
 		}
 	}
 }
@@ -245,6 +218,34 @@ func checkBall(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 
 }
 
+func createContacts(time core.Tick, state core.StateMap, mut core.MutFuncs) {
+	massinv := state["massinv"].(core.IdMap)
+	newrb := state["newrigbod"].(core.IdList)
+
+	for id1 := range newrb {
+		mut.Mutate("newrigbod", id1, nil)
+		minv1 := float64(massinv[id1].(helpers.Float64))
+		exclude := minv1 == 0
+		for id2, minv2 := range massinv {
+			if id1 == id2 {
+				continue
+			}
+			if minv2.(helpers.Float64) == 0 && exclude {
+				continue
+			}
+			c := physics.NewContact()
+			if id1 < id2 {
+				c.A = id1
+				c.B = id2
+			} else {
+				c.A = id2
+				c.B = id1
+			}
+			mut.Mutate("contact", 0, c)
+		}
+	}
+}
+
 func entSel(id core.EntId, state core.StateMap) []core.EntId {
 	pos := state["pos"].(helpers.VecMap)
 	list := make([]core.EntId, 0, 10)
@@ -265,8 +266,8 @@ func main() {
 	info.States[0] = "pos"
 	info.States[1] = "vel"
 	info.States[2] = "scale"
-	info.States[4] = "model"
-	//	info.States[5] = "score"
+	info.States[3] = "model"
+	info.States[4] = "score"
 
 	srv.SetSerInfo(info)
 
@@ -274,7 +275,9 @@ func main() {
 	srv.AddState("vel", helpers.NewVecMap())
 	srv.AddState("scale", helpers.NewVecMap())
 	srv.AddState("rot", core.NewIdMap())
+	srv.AddState("supportfunc", core.NewIdMap())
 	srv.AddState("contact", NewContactList())
+	srv.AddState("newrigbod", core.NewIdList())
 
 	srv.AddState("players", core.NewIdMap())
 	srv.AddState("model", core.NewIdMap())
@@ -284,6 +287,7 @@ func main() {
 
 	srv.AddTransFunc(0, initial)
 	srv.AddTransFunc(0, handleLogin)
+	srv.AddTransFunc(0, createContacts)
 	srv.AddTransFunc(0, destroyPlayer)
 	srv.AddTransFunc(1, processInput)
 	srv.AddTransFunc(2, resolveCollisions)

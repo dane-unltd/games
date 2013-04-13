@@ -3,10 +3,11 @@ package main
 import (
 	"github.com/dane-unltd/engine/core"
 	"github.com/dane-unltd/engine/helpers"
+	"github.com/dane-unltd/engine/physics"
 	. "github.com/dane-unltd/linalg/matrix"
 )
 
-func createPlayer(id core.EntId, playerNo helpers.Uint32, mut core.MutFuncs) {
+func createPlayer(state core.StateMap, id core.EntId, playerNo helpers.Uint32, mut core.MutFuncs) {
 	mut.Mutate("players", id, playerNo)
 	mut.Mutate("score", id, helpers.Uint32(3))
 
@@ -19,9 +20,12 @@ func createPlayer(id core.EntId, playerNo helpers.Uint32, mut core.MutFuncs) {
 	mut.Mutate("rot", id, rot)
 	mut.Mutate("massinv", id, helpers.Float64(0.1))
 	mut.Mutate("model", id, helpers.Uint32(1))
+	mut.Mutate("supportfunc", id, physics.LinOptPoly(physics.AABB(VecD{1, 1, 1})))
+	mut.Mutate("newrigbod", id, core.Empty{})
+
 }
 
-func createWall(pos, scale VecD, rot *DenseD, mut core.MutFuncs) {
+func createWall(state core.StateMap, pos, scale VecD, rot *DenseD, mut core.MutFuncs) {
 	id := mut.NewId()
 	mut.Mutate("pos", id, pos)
 	mut.Mutate("scale", id, scale)
@@ -29,9 +33,11 @@ func createWall(pos, scale VecD, rot *DenseD, mut core.MutFuncs) {
 	mut.Mutate("massinv", id, helpers.Float64(0))
 	mut.Mutate("vel", id, NewVecD(3))
 	mut.Mutate("model", id, helpers.Uint32(1))
+	mut.Mutate("supportfunc", id, physics.LinOptPoly(physics.AABB(VecD{1, 1, 1})))
+	mut.Mutate("newrigbod", id, core.Empty{})
 }
 
-func createBall(mut core.MutFuncs) {
+func createBall(state core.StateMap, mut core.MutFuncs) {
 	id := mut.NewId()
 	mut.Mutate("ball", id, core.Empty{})
 
@@ -44,4 +50,6 @@ func createBall(mut core.MutFuncs) {
 	mut.Mutate("rot", id, rot)
 	mut.Mutate("massinv", id, helpers.Float64(1))
 	mut.Mutate("model", id, helpers.Uint32(2))
+	mut.Mutate("supportfunc", id, physics.LinOptSphere(1))
+	mut.Mutate("newrigbod", id, core.Empty{})
 }

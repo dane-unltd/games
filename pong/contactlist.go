@@ -24,6 +24,18 @@ func (c ContactList) Clone() core.State {
 	return newCL
 }
 func (c ContactList) Mutate(id core.EntId, value interface{}) {
+	if value == nil {
+		remove := make([]IdPair, 0)
+		for ids := range c {
+			if ids.a == id || ids.b == id {
+				remove = append(remove, ids)
+			}
+		}
+		for _, ids := range remove {
+			delete(c, ids)
+		}
+		return
+	}
 	con := value.(*physics.Contact)
 	a := con.A
 	b := con.B
