@@ -12,7 +12,7 @@ func createPlayer(state core.StateMap, id core.EntId, playerNo helpers.Uint32, m
 	mut.Mutate("score", id, helpers.Uint32(3))
 
 	pos := VecD{(float64(playerNo) - 1.5) * 150, 0, 0}
-	scale := VecD{5, 10, 10}
+	scale := VecD{15, 15, 5}
 	rot := VecD{1, 0, 0, 0}
 	mut.Mutate("pos", id, pos)
 	mut.Mutate("vel", id, NewVecD(3))

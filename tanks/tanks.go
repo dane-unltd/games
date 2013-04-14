@@ -7,29 +7,43 @@ import (
 	_ "github.com/dane-unltd/linalg/blas"
 	. "github.com/dane-unltd/linalg/matrix"
 	"log"
-	"math/rand"
+	"math"
 	"os"
 )
 
 const (
-	cmdUp   = 0
-	cmdDown = 1
+	cmdUp    = 0
+	cmdDown  = 1
+	cmdLeft  = 2
+	cmdRight = 3
 )
 
 func initial(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 	if time != 1 {
 		return
 	}
+	//walls
 	pos := VecD{0, 60, 0}
 	size := VecD{200, 5, 50}
-	rot := VecD{100, 0, 0, 1}
+	rot := VecD{1, 0, 0, 0}
 	createWall(state, pos, size, rot, mut)
 
 	pos = VecD{0, -60, 0}
 	size = VecD{200, 5, 50}
-	rot = VecD{100, 0, 0, -1}
+	rot = VecD{1, 0, 0, 0}
 	createWall(state, pos, size, rot, mut)
 
+	pos = VecD{100, 0, 0}
+	size = VecD{5, 120, 50}
+	rot = VecD{1, 0, 0, 0}
+	createWall(state, pos, size, rot, mut)
+
+	pos = VecD{-100, 0, 0}
+	size = VecD{5, 120, 50}
+	rot = VecD{1, 0, 0, 0}
+	createWall(state, pos, size, rot, mut)
+
+	//floor
 	pos = VecD{0, 0, -30}
 	size = VecD{200, 150, 10}
 	rot = VecD{1, 0, 0, 0}
@@ -39,16 +53,14 @@ func initial(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 func move(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 	pos := state["pos"].(helpers.VecMap)
 	vel := state["vel"].(helpers.VecMap)
-	players := state["players"].(core.IdMap)
 
 	for id := range vel {
 		if !vel[id].Equals(NewVecD(3)) {
 			newVel := vel[id]
 			newVel[2] = 0
-			if _, ok := players[id]; ok {
-				newVel[0] = 0
-			}
-			pos[id].Add(pos[id], newVel)
+			newPos := NewVecD(3).Add(pos[id], newVel)
+			mut.Mutate("pos", id, newPos)
+			mut.Mutate("vel", id, newVel)
 		}
 	}
 }
@@ -56,17 +68,33 @@ func move(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 func processInput(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 	input := state["input"].(core.IdMap)
 	players := state["players"].(core.IdMap)
+	rot := state["rot"].(helpers.VecMap)
 
 	for id, _ := range players {
+		rotOld := physics.Quaternion(rot[id])
 		cmd := input[id].(core.UserCmd)
 		v := NewVecD(3)
+		rotAdd := physics.Quaternion(NewVecD(4))
 		if cmd.Active(cmdUp) {
 			v[1] += 3
 		}
 		if cmd.Active(cmdDown) {
 			v[1] -= 3
 		}
-		mut.Mutate("vel", id, v)
+		if cmd.Active(cmdLeft) {
+			rotAdd.Normalize(physics.Quaternion{10, 0, 0, 1})
+			rotOld.Mul(rotAdd, rotOld)
+		}
+		if cmd.Active(cmdRight) {
+			rotAdd.Normalize(physics.Quaternion{10, 0, 0, -1})
+			rotOld.Mul(rotAdd, rotOld)
+		}
+		rotOld.Normalize(rotOld)
+		R := physics.RotFromQuat(rotOld)
+		log.Println(rotOld, R)
+		vNew := NewVecD(3)
+		vNew.Mul(R, v)
+		mut.Mutate("vel", id, vNew)
 	}
 }
 
@@ -134,10 +162,12 @@ func resolveCollisions(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 	massInv := state["massinv"].(core.IdMap)
 	contacts := state["contact"].(ContactList)
 
-	for iter := 0; iter < 2; iter++ {
+	newVel := vel.Clone().(helpers.VecMap)
+
+	for iter := 0; iter < 10; iter++ {
 		for ids, c := range contacts {
 			pA, pB := pos[ids.a], pos[ids.b]
-			vA, vB := vel[ids.a], vel[ids.b]
+			vA, vB := newVel[ids.a], newVel[ids.b]
 			rotA := physics.RotFromQuat(physics.Quaternion(rot[ids.a]))
 			rotB := physics.RotFromQuat(physics.Quaternion(rot[ids.b]))
 			scaleA, scaleB := scale[ids.a], scale[ids.b]
@@ -157,64 +187,35 @@ func resolveCollisions(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 
 			remove := c.Dist - 1 - nV
 
+			if math.IsNaN(remove) {
+				log.Println(remove, c.Dist, nV)
+				panic("argh")
+			}
 			if remove < 0 {
 				log.Println(remove)
 				minvA := float64(massInv[ids.a].(helpers.Float64))
 				minvB := float64(massInv[ids.b].(helpers.Float64))
-				imp := -2 * nV / (minvA + minvB)
+				imp := remove / (minvA + minvB)
+				if math.IsNaN(imp) {
+					log.Println(remove, imp, minvA, minvB, c.Dist, nV)
+					panic("argh")
+				}
 
-				vel[ids.a].Add(vel[ids.a],
+				newVel[ids.a].Add(newVel[ids.a],
 					NewVecD(3).Axpy(imp*minvA, c.Normal))
-				vel[ids.b].Sub(vel[ids.b],
+				newVel[ids.b].Sub(newVel[ids.b],
 					NewVecD(3).Axpy(imp*minvB, c.Normal))
+				if math.IsNaN(newVel[ids.a][0]) {
+					log.Println(c.Normal, remove, imp, minvA, minvB, c.Dist, nV)
+					panic("argh")
+				}
 			}
+			mut.Mutate("contact", 0, c)
 		}
 	}
-}
-
-func checkBall(time core.Tick, state core.StateMap, mut core.MutFuncs) {
-	ball := state["ball"].(core.IdList)
-	score := state["score"].(core.IdMap)
-	pos := state["pos"].(helpers.VecMap)
-	players := state["players"].(core.IdMap)
-
-	var p1, p2 core.EntId
-	for id, v := range players {
-		if v.(helpers.Uint32) == 1 {
-			p1 = id
-		}
-		if v.(helpers.Uint32) == 2 {
-			p2 = id
-		}
+	for id, vel := range newVel {
+		mut.Mutate("vel", id, vel)
 	}
-
-	var ballId core.EntId
-	for id := range ball {
-		ballId = id
-	}
-
-	if (p1 == 0) || (p2 == 0) || (ballId == 0) {
-		return
-	}
-
-	ballPos := pos[ballId]
-	if ballPos[0] < -110 {
-		vely := (rand.Float64() - 0.5) * 4
-		vel := VecD{-3, vely, 0}
-		mut.Mutate("pos", ballId, NewVecD(3))
-		mut.Mutate("vel", ballId, vel)
-		mut.Mutate("score", p2, score[p2].(helpers.Uint32)+1)
-		log.Println(score)
-	}
-	if ballPos[0] > 110 {
-		vely := (rand.Float64() - 0.5) * 4
-		vel := VecD{3, vely, 0}
-		mut.Mutate("pos", ballId, NewVecD(3))
-		mut.Mutate("vel", ballId, vel)
-		mut.Mutate("score", p1, score[p1].(helpers.Uint32)+1)
-		log.Println(score)
-	}
-
 }
 
 func createContacts(time core.Tick, state core.StateMap, mut core.MutFuncs) {
@@ -232,6 +233,7 @@ func createContacts(time core.Tick, state core.StateMap, mut core.MutFuncs) {
 			if minv2.(helpers.Float64) == 0 && exclude {
 				continue
 			}
+			log.Println("new Contact ", id1, id2)
 			c := physics.NewContact()
 			if id1 < id2 {
 				c.A = id1
@@ -255,7 +257,7 @@ func entSel(id core.EntId, state core.StateMap) []core.EntId {
 }
 
 func main() {
-	path := os.Getenv("HOME") + "/nginx/ws/pong"
+	path := os.Getenv("HOME") + "/nginx/ws/tanks"
 	if len(os.Args) > 1 {
 		path = os.Args[1]
 	}
@@ -292,7 +294,6 @@ func main() {
 	srv.AddTransFunc(1, processInput)
 	srv.AddTransFunc(2, resolveCollisions)
 	srv.AddTransFunc(3, move)
-	srv.AddTransFunc(4, checkBall)
 
 	srv.Run()
 
